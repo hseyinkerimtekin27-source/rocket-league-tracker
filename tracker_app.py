@@ -2,6 +2,23 @@
 tracker_app.py
 ---------------
 Rocket League İstatistik Takipçisi — Arka Plan Uygulaması
+
+Ne yapar:
+- Windows başlangıcında (veya elle çalıştırınca) sistem tepsisine (system tray)
+  yerleşir, hiçbir pencere açmadan arkada bekler.
+- Rocket League'in replay klasörünü izler. Her maç bittiğinde oyun otomatik
+  olarak bir .replay dosyası kaydeder; bu dosya oluşur oluşmaz uygulama onu
+  okur, senin istatistiklerini (gol, asist, kurtarış, galibiyet/mağlubiyet,
+  MVP) otomatik çıkarır ve yerel bir veritabanına kaydeder.
+- Tepsi simgesine tıklayınca özet istatistik penceresi açılır.
+- Elle veri girmene gerek YOK — tek yapman gereken ilk çalıştırmada
+  Epic/Steam kullanıcı adını girmek (hangi oyuncunun "sen" olduğunu
+  anlaması için).
+
+Rank hakkında not: Replay dosyaları rankını içermiyor (Psyonix bu bilgiyi
+oraya yazmıyor). Bu yüzden rank alanı, sadece rank atladığında tepsi
+menüsünden tek tıkla güncellenebilir bir alan olarak bırakıldı — maç başına
+değil, sadece rank değiştiğinde dokunman yeterli.
 """
 
 import os
@@ -28,12 +45,31 @@ APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "RLSt
 DB_PATH = os.path.join(APP_DIR, "stats.db")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
-DEFAULT_REPLAY_DIR = os.path.join(
-    os.path.expanduser("~"), "Documents", "My Games", "Rocket League",
-    "TAGame", "Demos"
+_RL_BASE = os.path.join(
+    os.path.expanduser("~"), "Documents", "My Games", "Rocket League", "TAGame"
 )
+# Steam surumu "Demos" klasorunu kullanir, Epic Games Launcher surumu "DemosEpic" kullanir.
+CANDIDATE_REPLAY_DIRS = [
+    os.path.join(_RL_BASE, "Demos"),
+    os.path.join(_RL_BASE, "DemosEpic"),
+]
 
 
+def detect_replay_dir():
+    """Var olan replay klasorunu otomatik bulur (Steam ya da Epic)."""
+    for path in CANDIDATE_REPLAY_DIRS:
+        if os.path.isdir(path):
+            return path
+    # Hicbiri henuz olusmadiysa (oyun hic acilmamis / hic online mac oynanmamis),
+    # varsayilan olarak ilkini dondur; kullanici en az bir mac oynadiginda
+    # bir sonraki acilista dogru klasor otomatik bulunur.
+    return CANDIDATE_REPLAY_DIRS[0]
+
+
+DEFAULT_REPLAY_DIR = detect_replay_dir()
+
+
+# ---------------------------------------------------------------- config ---
 def load_config():
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -63,8 +99,8 @@ def ensure_setup():
             sys.exit("Oyuncu adı girilmedi, uygulama kapatılıyor.")
         cfg["player_name"] = name.strip()
         changed = True
-    if "replay_dir" not in cfg:
-        cfg["replay_dir"] = DEFAULT_REPLAY_DIR
+    if "replay_dir" not in cfg or not os.path.isdir(cfg.get("replay_dir", "")):
+        cfg["replay_dir"] = detect_replay_dir()
         changed = True
     if "current_rank" not in cfg:
         cfg["current_rank"] = "Sırasız"
@@ -74,6 +110,7 @@ def ensure_setup():
     return cfg
 
 
+# ------------------------------------------------------------- database ---
 def init_db():
     os.makedirs(APP_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -117,6 +154,7 @@ def save_match(conn, replay_file, info, rank):
         conn.commit()
         return True
     except sqlite3.IntegrityError:
+        # Bu replay zaten daha önce kaydedilmiş
         return False
 
 
@@ -141,6 +179,7 @@ def get_stats(conn):
     }
 
 
+# ----------------------------------------------------------- watcher ------
 class ReplayHandler(FileSystemEventHandler):
     def __init__(self, conn, cfg):
         self.conn = conn
@@ -149,6 +188,8 @@ class ReplayHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory or not event.src_path.lower().endswith(".replay"):
             return
+        # Replay dosyası oyun tarafından yazılırken kilitli olabilir,
+        # tam yazılmasını beklemek için kısa bir gecikme veriyoruz.
         threading.Timer(3.0, self._process, args=(event.src_path,)).start()
 
     def _process(self, path):
@@ -156,7 +197,7 @@ class ReplayHandler(FileSystemEventHandler):
             stats = parse_replay_header(path)
             info = find_user_result(stats, self.cfg["player_name"])
             if info is None:
-                return
+                return  # bu replay'de oyuncu adı eşleşmedi (izleyici/başka lobi)
             saved = save_match(self.conn, os.path.basename(path), info, self.cfg.get("current_rank", "Sırasız"))
             if saved:
                 self._notify(info)
@@ -174,9 +215,10 @@ class ReplayHandler(FileSystemEventHandler):
                 timeout=6,
             )
         except Exception:
-            pass
+            pass  # bildirim başarısız olsa bile veri zaten kaydedildi
 
 
+# ------------------------------------------------------------- tray UI ----
 def make_icon_image():
     img = Image.new("RGBA", (64, 64), (10, 13, 20, 255))
     d = ImageDraw.Draw(img)
@@ -246,6 +288,7 @@ def export_json(conn):
     messagebox.showinfo(APP_NAME, f"Dışa aktarıldı:\n{out_path}")
 
 
+# ------------------------------------------------------------------ main --
 def main():
     cfg = ensure_setup()
     conn = init_db()
