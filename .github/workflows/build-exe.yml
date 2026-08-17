@@ -1,9 +1,14 @@
 name: Windows exe derle
 
+# Bu workflow, kod GitHub'a push edildiğinde ya da elle tetiklendiğinde
+# GERÇEK bir Windows makinesinde (GitHub'ın ücretsiz sağladığı runner) çalışır.
+# Senin bilgisayarında Python kurulu olmasına gerek YOK.
+# Sonuç: RLStatsTracker.exe, "Actions" sekmesinden indirilebilir hale gelir.
+
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch: {}
+  workflow_dispatch: {}   # "Actions" sekmesinden elle "Run workflow" ile de tetiklenebilir
 
 jobs:
   build:
