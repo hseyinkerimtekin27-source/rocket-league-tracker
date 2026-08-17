@@ -1,0 +1,31 @@
+name: Windows exe derle
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: Python kur (runner üzerinde — senin bilgisayarında değil)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Bağımlılıkları yükle
+        run: pip install -r requirements.txt
+
+      - name: .exe derle
+        run: pyinstaller --noconfirm --onefile --windowed --name "RLStatsTracker" tracker_app.py
+
+      - name: .exe'yi yükle (Actions çıktısı olarak)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RLStatsTracker-windows
+          path: dist/RLStatsTracker.exe
