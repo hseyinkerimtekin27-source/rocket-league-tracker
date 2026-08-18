@@ -227,11 +227,15 @@ def make_icon_image():
     return img
 
 
-def open_stats_window(conn):
-    win = tk.Tk()
+def open_stats_window(root, conn):
+    win = tk.Toplevel(root)
     win.title(APP_NAME)
     win.geometry("380x360")
     win.configure(bg="#0A0D14")
+    win.lift()
+    win.focus_force()
+    win.attributes("-topmost", True)
+    win.after(300, lambda: win.attributes("-topmost", False))
 
     s = get_stats(conn)
 
@@ -253,25 +257,25 @@ def open_stats_window(conn):
     row(win, "MVP Sayısı", s["mvps"], "#F2C94C")
     row(win, "MVP Oranı", f"%{s['mvp_rate']:.1f}", "#F2C94C")
 
+    if s["total"] == 0:
+        tk.Label(win, text="Henüz kaydedilmiş maç yok.\nBir online maç oynayıp bitirdiğinde\nburası otomatik dolacak.",
+                 fg="#F2C94C", bg="#0A0D14", font=("Segoe UI", 9), justify="center").pack(pady=10)
+
     tk.Label(win, text="Bu pencere her açılışta güncel verilerle yenilenir.",
              fg="#5A6478", bg="#0A0D14", font=("Segoe UI", 8)).pack(side="bottom", pady=10)
 
-    win.mainloop()
 
-
-def update_rank(cfg):
-    root = tk.Tk()
-    root.withdraw()
+def update_rank(root, cfg):
     new_rank = simpledialog.askstring(
-        APP_NAME, f"Güncel rankın nedir? (şu an: {cfg.get('current_rank', 'Sırasız')})"
+        APP_NAME, f"Güncel rankın nedir? (şu an: {cfg.get('current_rank', 'Sırasız')})",
+        parent=root,
     )
-    root.destroy()
     if new_rank:
         cfg["current_rank"] = new_rank.strip()
         save_config(cfg)
 
 
-def export_json(conn):
+def export_json(root, conn):
     cur = conn.execute("""
         SELECT date, result, goals, assists, saves, mvp, rank, map_name, playlist
         FROM matches ORDER BY date ASC
@@ -285,7 +289,7 @@ def export_json(conn):
     out_path = os.path.join(os.path.expanduser("~"), "Desktop", "rl_stats_export.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    messagebox.showinfo(APP_NAME, f"Dışa aktarıldı:\n{out_path}")
+    messagebox.showinfo(APP_NAME, f"Dışa aktarıldı:\n{out_path}", parent=root)
 
 
 # ------------------------------------------------------------------ main --
@@ -301,6 +305,12 @@ def main():
             " klasör ilk maçtan sonra otomatik oluşur."
         )
 
+    # ÖNEMLİ: tkinter'ın kendi olay döngüsü (mainloop) ANA thread'de çalışmalı.
+    # pystray menü tıklamaları farklı bir thread'den geldiği için, pencere
+    # açma isteklerini root.after(...) ile ana thread'e "kuyruğa" alıyoruz.
+    root = tk.Tk()
+    root.withdraw()  # ana pencereyi hiç göstermiyoruz, sadece olay döngüsü için var
+
     observer = Observer()
     handler = ReplayHandler(conn, cfg)
     if os.path.isdir(cfg["replay_dir"]):
@@ -308,17 +318,18 @@ def main():
         observer.start()
 
     def on_open(icon, item):
-        threading.Thread(target=open_stats_window, args=(conn,), daemon=True).start()
+        root.after(0, lambda: open_stats_window(root, conn))
 
     def on_rank(icon, item):
-        update_rank(cfg)
+        root.after(0, lambda: update_rank(root, cfg))
 
     def on_export(icon, item):
-        export_json(conn)
+        root.after(0, lambda: export_json(root, conn))
 
     def on_quit(icon, item):
         observer.stop()
         icon.stop()
+        root.after(0, root.quit)
 
     menu = pystray.Menu(
         pystray.MenuItem("İstatistikleri Görüntüle", on_open, default=True),
@@ -327,7 +338,13 @@ def main():
         pystray.MenuItem("Çıkış", on_quit),
     )
     icon = pystray.Icon(APP_NAME, make_icon_image(), APP_NAME, menu)
-    icon.run()
+
+    # pystray, kendi olay döngüsünü ayrı bir arka plan thread'inde çalıştırır.
+    threading.Thread(target=icon.run, daemon=True).start()
+
+    # Ana thread'i tkinter'a bırakıyoruz — tüm pencere açma istekleri
+    # buradan (root.after ile) işlenecek.
+    root.mainloop()
 
 
 if __name__ == "__main__":
