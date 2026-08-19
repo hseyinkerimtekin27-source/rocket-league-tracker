@@ -332,6 +332,57 @@ def export_json(root, conn):
     messagebox.showinfo(APP_NAME, f"Dışa aktarıldı:\n{out_path}", parent=root)
 
 
+def scan_all_replays(root, conn, cfg):
+    """Klasordeki TUM .replay dosyalarini (yeni/eski fark etmeksizin) tarar,
+    henuz veritabaninda olmayanlari islemeye calisir, ve sonucu (kac tanesi
+    basarili, kac tanesi hatali, hata mesajlari dahil) bir pencerede gosterir.
+    Boylece watcher baslamadan once zaten klasorde duran eski dosyalar da
+    kaydedilir, ve parse hatalari sessizce kaybolmaz."""
+    replay_dir = cfg["replay_dir"]
+    try:
+        dosyalar = [f for f in os.listdir(replay_dir) if f.lower().endswith(".replay")]
+    except OSError as e:
+        messagebox.showerror(APP_NAME, f"Klasör okunamadı:\n{replay_dir}\n\n{e}", parent=root)
+        return
+
+    if not dosyalar:
+        messagebox.showinfo(APP_NAME, f"{replay_dir}\n\nBu klasörde hiç .replay dosyası yok.", parent=root)
+        return
+
+    basarili = 0
+    zaten_kayitli = 0
+    hatalar = []
+    isim_uyusmadi = 0
+
+    for fn in dosyalar:
+        full_path = os.path.join(replay_dir, fn)
+        try:
+            stats = parse_replay_header(full_path)
+            info = find_user_result(stats, cfg["player_name"])
+            if info is None:
+                isim_uyusmadi += 1
+                continue
+            saved = save_match(conn, fn, info, cfg.get("current_rank", "Sırasız"))
+            if saved:
+                basarili += 1
+            else:
+                zaten_kayitli += 1
+        except Exception as e:
+            hatalar.append(f"{fn}: {e}")
+
+    ozet = (
+        f"Taranan dosya: {len(dosyalar)}\n"
+        f"Yeni kaydedilen: {basarili}\n"
+        f"Zaten kayıtlıydı: {zaten_kayitli}\n"
+        f"İsim eşleşmedi (\"{cfg['player_name']}\" bu replay'de yok): {isim_uyusmadi}\n"
+        f"Hata (okunamadı): {len(hatalar)}"
+    )
+    if hatalar:
+        ornekler = "\n".join(hatalar[:5])
+        ozet += f"\n\nİlk birkaç hata:\n{ornekler}"
+    messagebox.showinfo(APP_NAME, ozet, parent=root)
+
+
 def show_replay_dir(root, cfg):
     dosya_sayisi = 0
     try:
